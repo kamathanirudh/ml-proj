@@ -14,6 +14,12 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from scipy.optimize import curve_fit
+import math
+from scipy.stats import linregress
+
+
+
+
 
 
 plt.rcParams.update({'font.size': 8}) 
@@ -609,39 +615,42 @@ def parameter_linear_regression_evaluation(df3):
 
 
 def parameter_exponential_regression_evaluation(df3):
-    
     def exponential_func(x, a, b):
         return a * np.exp(b * x)
-    
+
     target = 'Column Index'
     features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
                 'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
 
     metrics = {
-        'Feature': [], 'a': [], 'b': [], 'R²': [],
-        'RMSE': [], 'MAE': [], 'AIC': [], 'BIC': []
+        'Feature': [], 'a': [], 'b': [], 'R²': [], 'RMSE': [], 'MAE': [], 'AIC': [], 'BIC': []
     }
 
     y = df3[target].values
     n = len(y)
 
-    plt.figure(figsize=(12, 7))
-    plotted = False  # track if we plotted any valid curves
+    plots = []
 
     for feature in features:
         X = df3[feature].values
 
-        # Skip features with non-positive values
         if np.any(y <= 0) or np.any(X <= 0):
+            # Invalid for exponential regression
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
             continue
 
         try:
-            # Fit exponential curve
             popt, _ = curve_fit(exponential_func, X, y, maxfev=10000)
             a, b = popt
             y_pred = exponential_func(X, a, b)
 
-            # Evaluation metrics
             residuals = y - y_pred
             sse = np.sum(residuals ** 2)
             k = 2
@@ -649,13 +658,16 @@ def parameter_exponential_regression_evaluation(df3):
             mae = mean_absolute_error(y, y_pred)
             r2 = r2_score(y, y_pred)
 
-            if r2 < 0:
-                continue  # Skip poor fits
+            if r2 > 0:
+                aic = n * np.log(sse / n) + 2 * k
+                bic = n * np.log(sse / n) + k * np.log(n)
 
-            aic = n * np.log(sse / n) + 2 * k
-            bic = n * np.log(sse / n) + k * np.log(n)
+                # Save valid for plotting
+                plots.append((feature, X, y, y_pred, a, b, r2))
+            else:
+                a = b = rmse = mae = aic = bic = r2 = 0
 
-            # Store metrics
+            # Record metrics regardless
             metrics['Feature'].append(feature)
             metrics['a'].append(a)
             metrics['b'].append(b)
@@ -665,23 +677,40 @@ def parameter_exponential_regression_evaluation(df3):
             metrics['AIC'].append(aic)
             metrics['BIC'].append(bic)
 
-            # Plot valid curve
-            sorted_idx = np.argsort(X)
-            plt.plot(X[sorted_idx], y_pred[sorted_idx],
-                     label=f'{feature} (R²={r2:.2f})', linewidth=2)
-            plotted = True
-
         except Exception as e:
             print(f"Failed for {feature}: {e}")
-            continue
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
 
-    if plotted:
-        plt.scatter(range(len(y)), y, color='gray', alpha=0.4, label='Actual Data')
-        plt.title('Exponential Fits for Features with R² > 0')
-        plt.xlabel('Feature Value')
-        plt.ylabel('Column Index')
-        plt.legend()
-        plt.grid(True)
+    # Plot only valid R² > 0
+    num_plots = len(plots)
+    if num_plots > 0:
+        cols = 3
+        rows = math.ceil(num_plots / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, (feature, X, y, y_pred, a, b, r2) in enumerate(plots):
+            ax = axes[idx]
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='blue',
+                    label=f'y={a:.2f}·e^({b:.2f}·x)\nR²={r2:.2f}')
+            ax.set_title(f'{feature} vs Column Index')
+            ax.set_xlabel(feature)
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+
         plt.tight_layout()
         plt.show()
     else:
@@ -690,6 +719,703 @@ def parameter_exponential_regression_evaluation(df3):
     result_df = pd.DataFrame(metrics)
     result_df = result_df.sort_values(by='R²', ascending=False).reset_index(drop=True)
     return result_df
+
+
+def parameter_logarithmic_regression_evaluation(df3):
+    def log_func(x, a, b):
+        return a + b * np.log(x)
+
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+
+    metrics = {
+        'Feature': [], 'a': [], 'b': [], 'R²': [], 'RMSE': [], 'MAE': [], 'AIC': [], 'BIC': []
+    }
+
+    y = df3[target].values
+    n = len(y)
+
+    plots = []
+
+    for feature in features:
+        X = df3[feature].values
+
+        if np.any(y <= 0) or np.any(X <= 0):
+            # Invalid for log regression (log undefined for x <= 0)
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+            continue
+
+        try:
+            popt, _ = curve_fit(log_func, X, y, maxfev=10000)
+            a, b = popt
+            y_pred = log_func(X, a, b)
+
+            residuals = y - y_pred
+            sse = np.sum(residuals ** 2)
+            k = 2
+            rmse = np.sqrt(mean_squared_error(y, y_pred))
+            mae = mean_absolute_error(y, y_pred)
+            r2 = r2_score(y, y_pred)
+
+            if r2 > 0:
+                aic = n * np.log(sse / n) + 2 * k
+                bic = n * np.log(sse / n) + k * np.log(n)
+
+                plots.append((feature, X, y, y_pred, a, b, r2))
+            else:
+                a = b = rmse = mae = aic = bic = r2 = 0
+
+            metrics['Feature'].append(feature)
+            metrics['a'].append(a)
+            metrics['b'].append(b)
+            metrics['R²'].append(r2)
+            metrics['RMSE'].append(rmse)
+            metrics['MAE'].append(mae)
+            metrics['AIC'].append(aic)
+            metrics['BIC'].append(bic)
+
+        except Exception as e:
+            print(f"Failed for {feature}: {e}")
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+
+    # Plotting
+    num_plots = len(plots)
+    if num_plots > 0:
+        cols = 3
+        rows = math.ceil(num_plots / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, (feature, X, y, y_pred, a, b, r2) in enumerate(plots):
+            ax = axes[idx]
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='green',
+                    label=f'y={a:.2f} + {b:.2f}·ln(x)\nR²={r2:.2f}')
+            ax.set_title(f'{feature} vs Column Index')
+            ax.set_xlabel(feature)
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid logarithmic fits with R² > 0 were found.")
+
+    result_df = pd.DataFrame(metrics)
+    result_df = result_df.sort_values(by='R²', ascending=False).reset_index(drop=True)
+    return result_df
+
+
+def parameter_allometric_regression_evaluation(df3):
+    def power_func(x, a, b):
+        return a * x ** b
+
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+
+    metrics = {
+        'Feature': [], 'a': [], 'b': [], 'R²': [], 'RMSE': [], 'MAE': [], 'AIC': [], 'BIC': []
+    }
+
+    y = df3[target].values
+    n = len(y)
+
+    plots = []
+
+    for feature in features:
+        X = df3[feature].values
+
+        if np.any(y <= 0) or np.any(X <= 0):
+            # Invalid for power law regression (undefined for non-positive x or y)
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+            continue
+
+        try:
+            popt, _ = curve_fit(power_func, X, y, maxfev=10000)
+            a, b = popt
+            y_pred = power_func(X, a, b)
+
+            residuals = y - y_pred
+            sse = np.sum(residuals ** 2)
+            k = 2
+            rmse = np.sqrt(mean_squared_error(y, y_pred))
+            mae = mean_absolute_error(y, y_pred)
+            r2 = r2_score(y, y_pred)
+
+            if r2 > 0:
+                aic = n * np.log(sse / n) + 2 * k
+                bic = n * np.log(sse / n) + k * np.log(n)
+
+                plots.append((feature, X, y, y_pred, a, b, r2))
+            else:
+                a = b = rmse = mae = aic = bic = r2 = 0
+
+            metrics['Feature'].append(feature)
+            metrics['a'].append(a)
+            metrics['b'].append(b)
+            metrics['R²'].append(r2)
+            metrics['RMSE'].append(rmse)
+            metrics['MAE'].append(mae)
+            metrics['AIC'].append(aic)
+            metrics['BIC'].append(bic)
+
+        except Exception as e:
+            print(f"Failed for {feature}: {e}")
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+
+    # Plotting
+    num_plots = len(plots)
+    if num_plots > 0:
+        cols = 3
+        rows = math.ceil(num_plots / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, (feature, X, y, y_pred, a, b, r2) in enumerate(plots):
+            ax = axes[idx]
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='purple',
+                    label=f'y={a:.2f}·x^{b:.2f}\nR²={r2:.2f}')
+            ax.set_title(f'{feature} vs Column Index')
+            ax.set_xlabel(feature)
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid allometric (power law) fits with R² > 0 were found.")
+
+    result_df = pd.DataFrame(metrics)
+    result_df = result_df.sort_values(by='R²', ascending=False).reset_index(drop=True)
+    return result_df
+
+
+def parameter_quadratic_regression_evaluation(df3):
+    def quadratic_func(x, a, b, c):
+        return a * x**2 + b * x + c
+
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+
+    metrics = {
+        'Feature': [], 'a': [], 'b': [], 'c': [], 'R²': [], 'RMSE': [], 'MAE': [], 'AIC': [], 'BIC': []
+    }
+
+    y = pd.to_numeric(df3[target], errors='coerce').values
+    n = len(y)
+
+    plots = []
+
+    for feature in features:
+        X = pd.to_numeric(df3[feature], errors='coerce').values
+
+        mask = ~np.isnan(X) & ~np.isnan(y)
+        if np.sum(mask) == 0:
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['c'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+            continue
+
+        x_valid = X[mask]
+        y_valid = y[mask]
+
+        try:
+            popt, _ = curve_fit(quadratic_func, x_valid, y_valid, maxfev=10000)
+            a, b, c = popt
+            y_pred = quadratic_func(x_valid, a, b, c)
+
+            residuals = y_valid - y_pred
+            sse = np.sum(residuals ** 2)
+            k = 3
+            rmse = np.sqrt(mean_squared_error(y_valid, y_pred))
+            mae = mean_absolute_error(y_valid, y_pred)
+            r2 = r2_score(y_valid, y_pred)
+
+            if r2 > 0:
+                aic = n * np.log(sse / n) + 2 * k
+                bic = n * np.log(sse / n) + k * np.log(n)
+                plots.append((feature, x_valid, y_valid, y_pred, a, b, c, r2))
+            else:
+                a = b = c = rmse = mae = aic = bic = r2 = 0
+
+            metrics['Feature'].append(feature)
+            metrics['a'].append(a)
+            metrics['b'].append(b)
+            metrics['c'].append(c)
+            metrics['R²'].append(r2)
+            metrics['RMSE'].append(rmse)
+            metrics['MAE'].append(mae)
+            metrics['AIC'].append(aic)
+            metrics['BIC'].append(bic)
+
+        except Exception as e:
+            print(f"Failed for {feature}: {e}")
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['c'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+
+    if len(plots) > 0:
+        cols = 3
+        rows = math.ceil(len(plots) / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, (feature, X, y, y_pred, a, b, c, r2) in enumerate(plots):
+            ax = axes[idx]
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='green',
+                    label=f'y={a:.2f}x²+{b:.2f}x+{c:.2f}\nR²={r2:.2f}')
+            ax.set_title(f'{feature} vs Column Index')
+            ax.set_xlabel(feature)
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid quadratic fits with R² > 0 were found.")
+
+    return pd.DataFrame(metrics).sort_values(by='R²', ascending=False).reset_index(drop=True)
+
+
+def parameter_cubic_regression_evaluation(df3):
+    def cubic_func(x, a, b, c, d):
+        return a * x**3 + b * x**2 + c * x + d
+
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+
+    metrics = {
+        'Feature': [], 'a': [], 'b': [], 'c': [], 'd': [], 'R²': [], 'RMSE': [], 'MAE': [], 'AIC': [], 'BIC': []
+    }
+
+    y = pd.to_numeric(df3[target], errors='coerce').values
+    n = len(y)
+
+    plots = []
+
+    for feature in features:
+        X = pd.to_numeric(df3[feature], errors='coerce').values
+        mask = ~np.isnan(X) & ~np.isnan(y)
+
+        if np.sum(mask) == 0:
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['c'].append(0)
+            metrics['d'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+            continue
+
+        x_valid = X[mask]
+        y_valid = y[mask]
+
+        try:
+            popt, _ = curve_fit(cubic_func, x_valid, y_valid, maxfev=10000)
+            a, b, c, d = popt
+            y_pred = cubic_func(x_valid, a, b, c, d)
+
+            residuals = y_valid - y_pred
+            sse = np.sum(residuals ** 2)
+            k = 4
+            rmse = np.sqrt(mean_squared_error(y_valid, y_pred))
+            mae = mean_absolute_error(y_valid, y_pred)
+            r2 = r2_score(y_valid, y_pred)
+
+            if r2 > 0:
+                aic = n * np.log(sse / n) + 2 * k
+                bic = n * np.log(sse / n) + k * np.log(n)
+                plots.append((feature, x_valid, y_valid, y_pred, a, b, c, d, r2))
+            else:
+                a = b = c = d = rmse = mae = aic = bic = r2 = 0
+
+            metrics['Feature'].append(feature)
+            metrics['a'].append(a)
+            metrics['b'].append(b)
+            metrics['c'].append(c)
+            metrics['d'].append(d)
+            metrics['R²'].append(r2)
+            metrics['RMSE'].append(rmse)
+            metrics['MAE'].append(mae)
+            metrics['AIC'].append(aic)
+            metrics['BIC'].append(bic)
+
+        except Exception as e:
+            print(f"Failed for {feature}: {e}")
+            metrics['Feature'].append(feature)
+            metrics['a'].append(0)
+            metrics['b'].append(0)
+            metrics['c'].append(0)
+            metrics['d'].append(0)
+            metrics['R²'].append(0)
+            metrics['RMSE'].append(0)
+            metrics['MAE'].append(0)
+            metrics['AIC'].append(0)
+            metrics['BIC'].append(0)
+
+    if len(plots) > 0:
+        cols = 3
+        rows = math.ceil(len(plots) / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, (feature, X, y, y_pred, a, b, c, d, r2) in enumerate(plots):
+            ax = axes[idx]
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='orange',
+                    label=f'y={a:.2f}x³+{b:.2f}x²+{c:.2f}x+{d:.2f}\nR²={r2:.2f}')
+            ax.set_title(f'{feature} vs Column Index')
+            ax.set_xlabel(feature)
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid cubic fits with R² > 0 were found.")
+
+    return pd.DataFrame(metrics).sort_values(by='R²', ascending=False).reset_index(drop=True)
+
+
+def parameter_sigmoidal_regression_evaluation(df3):
+    def logistic(x, L, k, x0):
+        return L / (1 + np.exp(-k * (x - x0)))
+
+    from scipy.optimize import curve_fit
+
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+
+    metrics = {key: [] for key in ['Feature', 'L', 'k', 'x0', 'R²', 'RMSE', 'MAE', 'AIC', 'BIC']}
+    y = df3[target].values
+    n = len(y)
+    plots = []
+
+    for feature in features:
+        X = df3[feature].values
+
+        try:
+            popt, _ = curve_fit(logistic, X, y, maxfev=10000)
+            L, k, x0 = popt
+            y_pred = logistic(X, L, k, x0)
+
+            residuals = y - y_pred
+            sse = np.sum(residuals ** 2)
+            k_param = 3
+            rmse = np.sqrt(mean_squared_error(y, y_pred))
+            mae = mean_absolute_error(y, y_pred)
+            r2 = r2_score(y, y_pred)
+
+            if r2 > 0:
+                aic = n * np.log(sse / n) + 2 * k_param
+                bic = n * np.log(sse / n) + k_param * np.log(n)
+                plots.append((feature, X, y, y_pred, L, k, x0, r2))
+            else:
+                L = k = x0 = rmse = mae = aic = bic = r2 = 0
+
+            metrics['Feature'].append(feature)
+            metrics['L'].append(L)
+            metrics['k'].append(k)
+            metrics['x0'].append(x0)
+            metrics['R²'].append(r2)
+            metrics['RMSE'].append(rmse)
+            metrics['MAE'].append(mae)
+            metrics['AIC'].append(aic)
+            metrics['BIC'].append(bic)
+
+        except Exception as e:
+            print(f"Failed for {feature}: {e}")
+            for key in metrics:
+                metrics[key].append(0 if key != 'Feature' else feature)
+
+    if plots:
+        cols = 3
+        rows = math.ceil(len(plots) / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, (feature, X, y, y_pred, L, k, x0, r2) in enumerate(plots):
+            ax = axes[idx]
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='green',
+                    label=f'y={L:.2f}/(1+e^(-{k:.2f}(x-{x0:.2f})))\nR²={r2:.2f}')
+            ax.set_title(f'{feature} vs Column Index')
+            ax.set_xlabel(feature)
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid sigmoidal fits with R² > 0 were found.")
+
+    return pd.DataFrame(metrics).sort_values(by='R²', ascending=False).reset_index(drop=True)
+
+
+def parameter_gaussian_regression_evaluation(df3):
+    def gaussian(x, a, b, c):
+        return a * np.exp(-((x - b) ** 2) / (2 * c ** 2))
+
+    from scipy.optimize import curve_fit
+
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+
+    metrics = {key: [] for key in ['Feature', 'a', 'b', 'c', 'R²', 'RMSE', 'MAE', 'AIC', 'BIC']}
+    y = df3[target].values
+    n = len(y)
+    plots = []
+
+    for feature in features:
+        X = df3[feature].values
+
+        try:
+            popt, _ = curve_fit(gaussian, X, y, maxfev=10000)
+            a, b, c = popt
+            y_pred = gaussian(X, a, b, c)
+
+            residuals = y - y_pred
+            sse = np.sum(residuals ** 2)
+            k_param = 3
+            rmse = np.sqrt(mean_squared_error(y, y_pred))
+            mae = mean_absolute_error(y, y_pred)
+            r2 = r2_score(y, y_pred)
+
+            if r2 > 0:
+                aic = n * np.log(sse / n) + 2 * k_param
+                bic = n * np.log(sse / n) + k_param * np.log(n)
+                plots.append((feature, X, y, y_pred, a, b, c, r2))
+            else:
+                a = b = c = rmse = mae = aic = bic = r2 = 0
+
+            metrics['Feature'].append(feature)
+            metrics['a'].append(a)
+            metrics['b'].append(b)
+            metrics['c'].append(c)
+            metrics['R²'].append(r2)
+            metrics['RMSE'].append(rmse)
+            metrics['MAE'].append(mae)
+            metrics['AIC'].append(aic)
+            metrics['BIC'].append(bic)
+
+        except Exception as e:
+            print(f"Failed for {feature}: {e}")
+            for key in metrics:
+                metrics[key].append(0 if key != 'Feature' else feature)
+
+    if plots:
+        cols = 3
+        rows = math.ceil(len(plots) / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, (feature, X, y, y_pred, a, b, c, r2) in enumerate(plots):
+            ax = axes[idx]
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='red',
+                    label=f'y={a:.2f}·exp(-((x-{b:.2f})²)/(2·{c:.2f}²))\nR²={r2:.2f}')
+            ax.set_title(f'{feature} vs Column Index')
+            ax.set_xlabel(feature)
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid Gaussian fits with R² > 0 were found.")
+
+    return pd.DataFrame(metrics).sort_values(by='R²', ascending=False).reset_index(drop=True)
+
+
+
+# Define all models
+def linear(x, a, b): return a * x + b
+def exponential(x, a, b): return a * np.exp(b * x)
+def logarithmic(x, a, b): return a * np.log(x) + b
+def allometric(x, a, b): return a * x**b
+def quadratic(x, a, b, c): return a * x**2 + b * x + c
+def cubic(x, a, b, c, d): return a * x**3 + b * x**2 + c * x + d
+def sigmoidal(x, a, b, c): return a / (1 + np.exp(-b * (x - c)))
+def gaussian(x, a, b, c): return a * np.exp(-((x - b) ** 2) / (2 * c ** 2))
+
+models = {
+    'Linear': (linear, 2),
+    'Exponential': (exponential, 2),
+    'Logarithmic': (logarithmic, 2),
+    'Allometric': (allometric, 2),
+    'Quadratic': (quadratic, 3),
+    'Cubic': (cubic, 4),
+    'Sigmoidal': (sigmoidal, 3),
+    'Gaussian': (gaussian, 3)
+}
+
+def evaluate_best_curve(df3):
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+    
+    y = df3[target].values
+    n = len(y)
+    best_models = []
+    plot_data = []
+
+    for feature in features:
+        X = df3[feature].values
+        best_r2 = -np.inf
+        best_result = None
+
+        for model_name, (func, num_params) in models.items():
+            # Skip invalid domains
+            if model_name in ['Logarithmic', 'Exponential', 'Allometric'] and (np.any(X <= 0)):
+                continue
+            try:
+                popt, _ = curve_fit(func, X, y, maxfev=10000)
+                y_pred = func(X, *popt)
+                residuals = y - y_pred
+                sse = np.sum(residuals ** 2)
+                rmse = np.sqrt(mean_squared_error(y, y_pred))
+                mae = mean_absolute_error(y, y_pred)
+                r2 = r2_score(y, y_pred)
+                k = num_params
+
+                if r2 > 0:
+                    aic = n * np.log(sse / n) + 2 * k
+                    bic = n * np.log(sse / n) + k * np.log(n)
+                    if r2 > best_r2:
+                        best_r2 = r2
+                        best_result = {
+                            'Feature': feature, 'Model': model_name, 'Params': popt,
+                            'R²': r2, 'RMSE': rmse, 'MAE': mae, 'AIC': aic, 'BIC': bic,
+                            'X': X, 'y': y, 'y_pred': y_pred
+                        }
+            except Exception:
+                continue
+
+        if best_result:
+            best_models.append({
+                'Feature': best_result['Feature'], 'Model': best_result['Model'],
+                'R²': best_result['R²'], 'RMSE': best_result['RMSE'], 'MAE': best_result['MAE'],
+                'AIC': best_result['AIC'], 'BIC': best_result['BIC'], 'Params': best_result['Params']
+            })
+            plot_data.append(best_result)
+
+    # Plotting best fits
+    if plot_data:
+        cols = 3
+        rows = math.ceil(len(plot_data) / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows))
+        axes = axes.flatten()
+
+        for idx, result in enumerate(plot_data):
+            ax = axes[idx]
+            X, y, y_pred = result['X'], result['y'], result['y_pred']
+            sorted_idx = np.argsort(X)
+            ax.scatter(X, y, color='gray', alpha=0.5, label='Actual')
+            ax.plot(X[sorted_idx], y_pred[sorted_idx], color='blue',
+                    label=f"{result['Model']}\nR²={result['R²']:.2f}")
+            ax.set_title(f"{result['Feature']} vs Column Index")
+            ax.set_xlabel(result['Feature'])
+            ax.set_ylabel('Column Index')
+            ax.legend()
+            ax.grid(True)
+
+        for j in range(idx + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid fits with R² > 0 were found.")
+
+    return pd.DataFrame(best_models).sort_values(by='R²', ascending=False).reset_index(drop=True)
+
+
+
+
+
+
+
+
+
 
 
 
@@ -954,6 +1680,46 @@ if __name__ == "__main__":
     print()
     
     
+    r2_df = parameter_logarithmic_regression_evaluation(df3)
+    print(" ----------------------------------------------------- Data Frame:  parameter_logarithminc_regression_evaluation  -----------------------------------------------------")
+    print(r2_df)
+    print()
+    print()
+    
+    
+    r2_df = parameter_allometric_regression_evaluation(df3)
+    print(" ----------------------------------------------------- Data Frame:  parameter_allometric_regression_evaluation  -----------------------------------------------------")
+    print(r2_df)
+    print()
+    print()
+    
+    r2_df = parameter_quadratic_regression_evaluation(df3)
+    print(" ----------------------------------------------------- Data Frame:  parameter_quadratic_regression_evaluation  -----------------------------------------------------")
+    print(r2_df)
+    print()
+    print()
+    
+    
+    r2_df = parameter_cubic_regression_evaluation(df3)
+    print(" ----------------------------------------------------- Data Frame:  parameter_cubic_regression_evaluation  -----------------------------------------------------")
+    print(r2_df)
+    print()
+    print()
+    
+    
+    r2_df = parameter_sigmoidal_regression_evaluation(df3)
+    print(" ----------------------------------------------------- Data Frame:  parameter_sigmoidal_regression_evaluation  -----------------------------------------------------")
+    print(r2_df)
+    print()
+    print()
+    
+    
+    r2_df = parameter_gaussian_regression_evaluation(df3)
+    print(" ----------------------------------------------------- Data Frame:  parameter_gaussian_regression_evaluation  -----------------------------------------------------")
+    print(r2_df)
+    print()
+    print()
+
     
     
     groupwise_r2=groupwise_r2(df3)
@@ -990,3 +1756,9 @@ if __name__ == "__main__":
     print(results_df)
     print()
     print()'''
+    
+    print(" ----------------------------------------------------- Data Frame:  final_param_evaluation -----------------------------------------------------")
+    result_df = evaluate_best_curve(df3)
+    print(result_df)
+
+0.933579
