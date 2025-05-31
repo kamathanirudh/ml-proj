@@ -7,7 +7,14 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from sklearn.cross_decomposition import CCA
 from sklearn.preprocessing import StandardScaler
-from skimage.color import rgb2hsv
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from scipy.optimize import curve_fit
+
 
 plt.rcParams.update({'font.size': 8}) 
 
@@ -98,7 +105,7 @@ def detect_circles_yolo(image_path, rows, cols, api_key, model_id):
     plt.figure(figsize=(10, 10))
     plt.imshow(cv2.cvtColor(image_with_detections, cv2.COLOR_BGR2RGB))
     plt.axis("off")
-    plt.show()
+    '''plt.show()'''
 
     # Initialize DataFrame
     df = pd.DataFrame(columns=['Circle Number', 'Average R', 'Average G', 'Average B',
@@ -325,12 +332,13 @@ def detect_circles_yolo(image_path, rows, cols, api_key, model_id):
             ax.grid(True)
 
         plt.tight_layout()
-        plt.show()
+        '''plt.show()'''
 
 
     plot_measurements_grid(experiments, conc_values)
     
     return numbered_circles, df
+
 
 def delta_e_calc(df, rows, cols):
     total = rows * cols
@@ -381,8 +389,6 @@ def gray_scale_conv(df):
     return df
 
 
-
-
 def plot_wo_blank_value(df, rows, cols, concentrations):
     # Drop unnecessary columns
     df2 = df.drop(columns=['Normalised R', 'Normalised G', 'Normalised B'], errors='ignore')
@@ -425,7 +431,7 @@ def plot_wo_blank_value(df, rows, cols, concentrations):
     for j in range(i + 1, len(axes1)):
         fig1.delaxes(axes1[j])
     plt.tight_layout()
-    plt.show()
+    '''plt.show()'''
 
     # ---------- 2. Scatter Plot Grid (Flipped Axes) ----------
     fig2, axes2 = plt.subplots(num_rows, max_cols, figsize=(15, 5 * num_rows))
@@ -450,10 +456,9 @@ def plot_wo_blank_value(df, rows, cols, concentrations):
     for j in range(i + 1, len(axes2)):
         fig2.delaxes(axes2[j])
     plt.tight_layout()
-    plt.show()
+    '''plt.show()'''
 
     return df2, filtered_df
-
 
 
 def add_experiment_column(df2, total_experiments, cols_per_experiment):
@@ -526,7 +531,6 @@ def add_experiment_column(df2, total_experiments, cols_per_experiment):
 #     correlation_ranking = results_df["Parameter"].tolist()
 
 #     return df4, results_df.drop(columns=["Abs Correlation"]), correlation_ranking
-
 def parameter_correlaton(df3):
     X = df3['Column Index'].values  # This is the concentration
 
@@ -554,28 +558,139 @@ def parameter_correlaton(df3):
     return manual_corr_df
 
 
-def parameter_linear_regression_r2(df3):
+def parameter_linear_regression_evaluation(df3):
     target = 'Column Index'
-    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z', 'L', 'A', 'B','H','S','V','Grayscale','Delta E']
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z', 'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
 
-    r2_scores = {}
+    metrics = {
+        'Feature': [],
+        'R²': [],
+        'RMSE': [],
+        'MAE': [],
+        'AIC': [],
+        'BIC': []
+    }
+
+    y = df3[target].values
+    n = len(y)
 
     for feature in features:
-        X = df3[[feature]].values  # Note: 2D array for sklearn
-        y = df3[target].values
-
-        # Fit linear regression
+        X = df3[[feature]].values  # 2D array
         model = LinearRegression().fit(X, y)
+        y_pred = model.predict(X)
 
-        # Calculate R²
+        # Residuals
+        residuals = y - y_pred
+
+        # Metrics
         r2 = model.score(X, y)
+        rmse = np.sqrt(mean_squared_error(y, y_pred))
+        mae = mean_absolute_error(y, y_pred)
 
-        r2_scores[feature] = r2
+        # Log-likelihood for AIC/BIC
+        sse = np.sum(residuals ** 2)
+        k = X.shape[1] + 1  # parameters (slope + intercept)
+        aic = n * np.log(sse / n) + 2 * k
+        bic = n * np.log(sse / n) + k * np.log(n)
 
-    # Convert to DataFrame
-    r2_df = pd.DataFrame.from_dict(r2_scores, orient='index', columns=['R²'])
-    r2_df = r2_df.sort_values(by='R²', ascending=False)
-    return r2_df
+        # Store results
+        metrics['Feature'].append(feature)
+        metrics['R²'].append(r2)
+        metrics['RMSE'].append(rmse)
+        metrics['MAE'].append(mae)
+        metrics['AIC'].append(aic)
+        metrics['BIC'].append(bic)
+
+    # Convert to DataFrame and sort by R² (descending) or AIC/BIC (ascending)
+    result_df = pd.DataFrame(metrics)
+    result_df = result_df.sort_values(by='R²', ascending=False).reset_index(drop=True)
+
+    return result_df
+
+
+def parameter_exponential_regression_evaluation(df3):
+    
+    def exponential_func(x, a, b):
+        return a * np.exp(b * x)
+    
+    target = 'Column Index'
+    features = ['Average R', 'Average G', 'Average B', 'X', 'Y', 'Z',
+                'L', 'A', 'B', 'H', 'S', 'V', 'Grayscale', 'Delta E']
+
+    metrics = {
+        'Feature': [], 'a': [], 'b': [], 'R²': [],
+        'RMSE': [], 'MAE': [], 'AIC': [], 'BIC': []
+    }
+
+    y = df3[target].values
+    n = len(y)
+
+    plt.figure(figsize=(12, 7))
+    plotted = False  # track if we plotted any valid curves
+
+    for feature in features:
+        X = df3[feature].values
+
+        # Skip features with non-positive values
+        if np.any(y <= 0) or np.any(X <= 0):
+            continue
+
+        try:
+            # Fit exponential curve
+            popt, _ = curve_fit(exponential_func, X, y, maxfev=10000)
+            a, b = popt
+            y_pred = exponential_func(X, a, b)
+
+            # Evaluation metrics
+            residuals = y - y_pred
+            sse = np.sum(residuals ** 2)
+            k = 2
+            rmse = np.sqrt(mean_squared_error(y, y_pred))
+            mae = mean_absolute_error(y, y_pred)
+            r2 = r2_score(y, y_pred)
+
+            if r2 < 0:
+                continue  # Skip poor fits
+
+            aic = n * np.log(sse / n) + 2 * k
+            bic = n * np.log(sse / n) + k * np.log(n)
+
+            # Store metrics
+            metrics['Feature'].append(feature)
+            metrics['a'].append(a)
+            metrics['b'].append(b)
+            metrics['R²'].append(r2)
+            metrics['RMSE'].append(rmse)
+            metrics['MAE'].append(mae)
+            metrics['AIC'].append(aic)
+            metrics['BIC'].append(bic)
+
+            # Plot valid curve
+            sorted_idx = np.argsort(X)
+            plt.plot(X[sorted_idx], y_pred[sorted_idx],
+                     label=f'{feature} (R²={r2:.2f})', linewidth=2)
+            plotted = True
+
+        except Exception as e:
+            print(f"Failed for {feature}: {e}")
+            continue
+
+    if plotted:
+        plt.scatter(range(len(y)), y, color='gray', alpha=0.4, label='Actual Data')
+        plt.title('Exponential Fits for Features with R² > 0')
+        plt.xlabel('Feature Value')
+        plt.ylabel('Column Index')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No valid exponential fits with R² > 0 were found.")
+
+    result_df = pd.DataFrame(metrics)
+    result_df = result_df.sort_values(by='R²', ascending=False).reset_index(drop=True)
+    return result_df
+
 
 
 def groupwise_r2(df, conc='Column Index'):
@@ -727,6 +842,39 @@ def groupwise_correlation_secondtry(df, target='Column Index'):
     return pd.DataFrame(group_corr).sort_values(by="Mean Abs Corr to Target", ascending=False)
 
 
+def plot_3D_color_spaces(df):
+    # Define color spaces and their corresponding column names
+    color_spaces = [
+        ("RGB", ['Average R', 'Average G', 'Average B']),
+        ("HSV", ['H', 'S', 'V']),
+        ("LAB", ['L', 'A', 'B']),
+        ("XYZ", ['X', 'Y', 'Z'])
+    ]
+
+    # Create a unique color for each Column Index
+    unique_indices = sorted(df['Column Index'].unique())
+    colormap = cm.get_cmap('tab10', len(unique_indices))  # Or use 'Set1', 'tab20', etc.
+    index_to_color = {idx: colormap(i) for i, idx in enumerate(unique_indices)}
+    
+    # Set up the figure
+    fig = plt.figure(figsize=(6 * len(color_spaces), 6))
+    
+    for i, (space_name, cols) in enumerate(color_spaces, start=1):
+        ax = fig.add_subplot(1, len(color_spaces), i, projection='3d')
+        x, y, z = df[cols[0]], df[cols[1]], df[cols[2]]
+        # Assign color based on Column Index
+        colors = df['Column Index'].map(index_to_color)
+        
+        ax.scatter(x, y, z, c=colors, s=60)
+        ax.set_title(f"{space_name} Space")
+        ax.set_xlabel(cols[0])
+        ax.set_ylabel(cols[1])
+        ax.set_zlabel(cols[2])
+
+    plt.tight_layout()
+    plt.show()
+
+
 
 if __name__ == "__main__":
     api_key = "y6u7lWMqSmjyVGQh4KJJ"
@@ -793,11 +941,18 @@ if __name__ == "__main__":
     print()
     
     
-    r2_df = parameter_linear_regression_r2(df3)
+    r2_df = parameter_linear_regression_evaluation(df3)
     print(" ----------------------------------------------------- Data Frame:  individual_parameter_r2_linearregg  -----------------------------------------------------")
     print(r2_df)
     print()
     print()
+    
+    r2_df = parameter_exponential_regression_evaluation(df3)
+    print(" ----------------------------------------------------- Data Frame:  parameter_exponential_regression_evaluation  -----------------------------------------------------")
+    print(r2_df)
+    print()
+    print()
+    
     
     
     
@@ -827,3 +982,11 @@ if __name__ == "__main__":
     print(result)
     print()
     print()
+
+    plot_3D_color_spaces(df3)
+
+    '''print(" ----------------------------------------------------- Data Frame:  Clustering_Accuracy -----------------------------------------------------")
+    results_df = evaluate_color_space_clustering(df3)
+    print(results_df)
+    print()
+    print()'''
